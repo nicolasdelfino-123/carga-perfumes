@@ -1,0 +1,8 @@
+{
+  "catalogo_origen": {
+    "database": "catalogo_origen",
+    "url_env": "ORIGEN_DATABASE_URL",
+    "roles": ["source"],
+    "image_root": "/ruta/local/al/uploads/del/origen"
+  }
+}

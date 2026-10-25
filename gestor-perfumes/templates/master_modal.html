@@ -1,0 +1,10 @@
+<style>
+.master-dialog{width:min(900px,94vw);max-height:88vh;border:1px solid #d6d3d1;border-radius:14px;padding:24px;box-sizing:border-box}.master-dialog::backdrop{background:#0008}.master-dialog-head{display:flex;gap:20px;justify-content:space-between;align-items:center}.master-dialog-head h2{margin:0}.master-dialog input[type=search]{width:100%}.master-dialog-results{display:grid;gap:12px}.master-result{border:1px solid #ddd;border-radius:9px;padding:14px;display:grid;grid-template-columns:80px minmax(0,1fr) auto;gap:14px;align-items:center}.master-result h3{margin:0 0 6px;overflow-wrap:anywhere}.master-result p{margin:5px 0}.master-result-photo{width:80px;height:90px;object-fit:contain;background:#f5f4ef;border-radius:6px}.master-result-actions{display:grid;gap:10px}.master-dialog-status{min-height:22px;color:#555}.master-dialog-close{background:white;color:#222}.master-dialog-context{background:#f5f4ef;border-radius:6px;padding:12px}@media(max-width:600px){.master-dialog{padding:16px}.master-result{grid-template-columns:60px minmax(0,1fr)}.master-result-photo{width:60px;height:75px}.master-result-actions{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between}}
+</style>
+<dialog id="master-dialog" class="master-dialog" aria-labelledby="master-dialog-title">
+<div class="master-dialog-head"><h2 id="master-dialog-title">Buscar en la maestra</h2><button type="button" id="master-dialog-close" class="master-dialog-close">Cerrar ✕</button></div>
+<p id="master-dialog-context" class="master-dialog-context"></p>
+<label for="master-dialog-query">Nombre, marca o una parte del nombre</label><input type="search" id="master-dialog-query" autocomplete="off" placeholder="Ejemplo: liquid brun">
+<p id="master-dialog-status" class="master-dialog-status" role="status" aria-live="polite"></p><div id="master-dialog-results" class="master-dialog-results" aria-busy="false"></div>
+</dialog>
+<script src="{{ url_for('static',filename='master-search.js') }}" defer></script>

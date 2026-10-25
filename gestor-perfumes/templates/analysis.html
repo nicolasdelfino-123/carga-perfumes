@@ -1,0 +1,62 @@
+{% extends 'base.html' %}
+{% block counters %}
+<div class="page-counters" aria-label="Contadores de comparación">
+<div><strong>{{ master_count }}</strong><span>Guardados en maestra</span></div><div><strong>{{ source_count }}</strong><span>Consultados en {{ source }}</span></div><div><strong>{{ counts.new }}</strong><span>Nuevos</span></div><div><strong id="top-duplicate-count">{{ counts.duplicate }}</strong><span>Repetidos excluidos</span></div><div><strong id="top-review-count">{{ counts.review }}</strong><span>Parecidos por revisar</span></div><div><strong id="visible-count">{{ master_count + source_count }}</strong><span>Renglones visibles</span></div>
+</div>
+{% endblock %}
+{% block content %}
+<style>
+.comparison-table{table-layout:fixed}.comparison-table th:nth-child(1){width:16%}.comparison-table th:nth-child(2){width:38%}.comparison-table th:nth-child(3){width:17%}.comparison-table th:nth-child(4){width:29%}.comparison-table td{overflow-wrap:anywhere;vertical-align:top}.comparison-group .master-row{background:#f0f8f3}.comparison-group .duplicate-row{background:#fff0f0;color:#991b1b}.duplicate-row .perfume-name{text-decoration:line-through;color:#991b1b}.comparison-group .review-row{background:#fff7dc}.comparison-group .new-row{background:#f3f7ff}.comparison-group tr:first-child td{border-top:3px solid #d6d3d1}.comparison-group .review-row.duplicate-row{background:#fff0f0;color:#991b1b}.comparison-table select{width:100%;padding:8px;white-space:normal;font:inherit;border-radius:5px}.comparison-table label{margin:0}.origin-badge{display:block;font-size:12px;margin-top:5px}.comparison-tools{display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin:20px 0}.comparison-tools label{margin:0}.comparison-tools input{max-width:240px}.comparison-footer{position:sticky;bottom:0;background:#fff;border-top:2px solid #d6d3d1;padding:16px;box-shadow:0 -3px 12px #0001}.comparison-footer p{margin-top:0}.table-scroll{overflow-x:auto}.comparison-table{min-width:650px}[hidden]{display:none!important}
+</style>
+<section><h2>Comparar maestra con {{ source }}</h2>
+<p><strong>Esta lista reúne lo que ya guardaste y lo que trae el nuevo origen.</strong> Los renglones verdes son de la maestra. Los repetidos del origen aparecen tachados en rojo y no se suman. Los parecidos quedan juntos en amarillo para que decidas si son el mismo perfume o una variante distinta.</p>
+<form method="post" action="/recover/analyzed" id="comparison-form">
+<input type="hidden" name="csrf" value="{{ session.csrf }}"><input type="hidden" name="token" value="{{ token }}">
+<div class="comparison-tools"><label>Buscar en la comparación<input id="comparison-search" placeholder="Nombre o marca" type="search"></label><label>Mostrar<select id="comparison-filter"><option value="all">Todos, con sus coincidencias</option><option value="review">Solo parecidos por resolver</option><option value="new">Solo nuevos</option><option value="duplicate">Solo repetidos</option><option value="master">Solo grupos de la maestra</option></select></label><button type="button" id="select-new">Marcar todos los nuevos</button><button type="button" id="clear-all">Desmarcar nuevos</button></div>
+<div class="table-scroll"><table class="comparison-table"><thead><tr><th>Procedencia</th><th>Perfume</th><th>Marca</th><th>Qué hacer</th></tr></thead>
+{% for group in groups %}<tbody class="comparison-group" data-status="{{ group.status }}" data-has-master="{{ 'yes' if group.rows|selectattr('kind','equalto','master')|list else 'no' }}">
+{% for item in group.rows %}{% set row = item.row %}<tr class="{{ 'master-row' if item.kind == 'master' else item.status ~ '-row' }}" data-row-kind="{{ item.kind }}" data-name="{{ row.name }} {{ row.brand or '' }}">
+<td>{% if item.kind == 'master' %}<strong>MAESTRA</strong><span class="origin-badge">{% for origin in row.origins or [] %}{{ origin.source }}{% if not loop.last %}, {% endif %}{% else %}Biblioteca local{% endfor %}</span>{% else %}<strong>{{ source }}</strong><span class="origin-badge">Nuevo origen</span>{% endif %}</td>
+<td><a class="perfume-name" href="{{ url_for('perfume_detail',perfume_id=row.id) if item.kind == 'master' else url_for('source_detail',alias=source,product_id=row.id) }}" target="_blank" rel="noopener"><strong>{{ row.name }}</strong></a><br><small>Ver fotos y descripciones ↗</small>{% if item.status == 'review' %}<p><small>Comparalo con los perfumes del mismo grupo, en los renglones contiguos.</small></p>{% endif %}</td>
+<td>{{ row.brand or 'Sin marca' }}</td>
+<td>{% if item.kind == 'master' %}<strong>Se conserva</strong><br><small>Ya guardado; no se elimina.</small>{% elif item.status == 'duplicate' %}<strong>{{ 'MARCADO COMO EL MISMO' if item.manual_skip else 'REPETIDO · NO SUMAR' }}</strong><br><small>Se conserva el ejemplar existente.</small>{% if item.manual_skip %}<br><button type="submit" formaction="/recover/decision/reset" name="source_id" value="{{ row.id }}" formnovalidate>Revisar de nuevo</button>{% endif %}{% elif item.status == 'review' %}<label><span class="origin-badge">Confirmá si es el mismo:</span><select name="decision_{{ row.id }}" class="review-decision"><option value="pending">Pendiente de revisar</option><option value="same">Es el mismo: no sumar</option><option value="new">Es distinto: sumar</option></select></label>{% else %}<label><input type="checkbox" name="perfume" value="{{ row.id }}" data-status="new" checked> Sumar a maestra</label><small>Sin coincidencia detectada.</small>{% endif %}</td>
+</tr>{% endfor %}</tbody>{% endfor %}
+</table></div>
+<div class="comparison-footer" aria-live="polite"><p><strong id="selected-count">{{ counts.new }}</strong> perfumes elegidos para sumar · <strong id="pending-count">{{ counts.review }}</strong> parecidos pendientes · <strong id="result-count">{{ master_count + counts.new }}</strong> perfumes quedarían en la maestra.</p><button>Confirmar comparación y revisar fotos antes de guardar</button><p><small>La maestra actual se conserva completa. Solo se agregan los elegidos, con sus textos y fotos, después de confirmar el guardado local. Los pendientes no se incorporan. Tus decisiones «Es el mismo» quedan guardadas localmente y se pueden deshacer. Hasta 500 nuevos por lote.</small></p></div>
+</form></section>
+<script>
+const groups=[...document.querySelectorAll('.comparison-group')];
+const checks=[...document.querySelectorAll('input[name="perfume"]')];
+const decisions=[...document.querySelectorAll('.review-decision')];
+const masterCount={{ master_count|tojson }};
+function updateCounters(){
+ const selected=checks.filter(x=>x.checked).length+decisions.filter(x=>x.value==='new').length;
+ document.getElementById('selected-count').textContent=selected;
+ const pending=decisions.filter(x=>x.value==='pending').length;
+ document.getElementById('pending-count').textContent=pending;
+ document.getElementById('top-review-count').textContent=pending;
+ document.getElementById('top-duplicate-count').textContent={{ counts.duplicate|tojson }}+decisions.filter(x=>x.value==='same').length;
+ document.getElementById('result-count').textContent=masterCount+selected;
+}
+function normalizeText(value){return value.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();}
+function filterGroups(){
+ const query=normalizeText(document.getElementById('comparison-search').value.trim());
+ const filter=document.getElementById('comparison-filter').value;
+ let visible=0;
+ groups.forEach(group=>{
+  const matchesText=[...group.querySelectorAll('tr')].some(row=>normalizeText(row.dataset.name).includes(query));
+  const groupDecisions=[...group.querySelectorAll('.review-decision')];
+  const matchesFilter=filter==='all'||(filter==='master'&&group.dataset.hasMaster==='yes')||(filter==='review'&&groupDecisions.some(x=>x.value==='pending'))||(filter==='new'&&(group.querySelector('.new-row')||groupDecisions.some(x=>x.value==='new')))||(filter==='duplicate'&&!!group.querySelector('.duplicate-row'));
+  group.hidden=!(matchesText&&matchesFilter);
+  if(!group.hidden)visible+=group.querySelectorAll('tr').length;
+ });
+ document.getElementById('visible-count').textContent=visible;
+}
+checks.forEach(x=>x.addEventListener('change',updateCounters));
+decisions.forEach(x=>x.addEventListener('change',()=>{x.closest('tr').classList.toggle('duplicate-row',x.value==='same');updateCounters();filterGroups();}));
+document.getElementById('select-new').addEventListener('click',()=>{checks.forEach(x=>x.checked=true);updateCounters();});
+document.getElementById('clear-all').addEventListener('click',()=>{checks.forEach(x=>x.checked=false);updateCounters();});
+document.getElementById('comparison-search').addEventListener('input',filterGroups);
+document.getElementById('comparison-filter').addEventListener('change',filterGroups);
+</script>
+{% endblock %}

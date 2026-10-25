@@ -1,0 +1,13 @@
+{% if client_summary and client_summary.total_requested %}
+<div class="page-counters" {% if live_summary %}id="client-list-summary" data-total="{{ client_summary.total_requested }}" aria-live="polite"{% endif %}>
+<div><strong {% if live_summary %}id="client-total-count"{% endif %}>{{ client_summary.total_requested }}</strong><span>Pedidos en tu lista</span></div>
+<div><strong {% if live_summary %}id="client-matched-count"{% endif %}>{{ client_summary.matched_lines }}</strong><span>Renglones con coincidencia elegida</span></div>
+<div><strong {% if live_summary %}id="client-unique-count"{% endif %}>{{ client_summary.unique_selected }}</strong><span>Perfumes únicos seleccionados</span></div>
+<div><strong {% if live_summary %}id="client-manual-count"{% endif %}>{{ client_summary.manual_count }}</strong><span>A cargar a mano (confirmados)</span></div>
+<div><strong {% if live_summary %}id="client-pending-count"{% endif %}>{{ client_summary.pending_count }}</strong><span>Pendientes de revisar</span></div>
+<div><strong {% if live_summary %}id="client-outside-count"{% endif %}>{{ client_summary.outside_count }}</strong><span>Fuera de esta selección</span></div>
+</div>
+<p {% if live_summary %}id="client-repeat-note"{% endif %}>{{ client_summary.repeated_lines }} renglones repiten perfumes ya elegidos: se incluirán una sola vez en la selección.</p>
+<details><summary>Ver los <span {% if live_summary %}id="client-outside-list-count"{% endif %}>{{ client_summary.outside_count }}</span> que quedan fuera de la selección</summary><ol {% if live_summary %}id="client-outside-list"{% endif %}>{% for item in client_summary.outside %}<li>{% if live_summary %}<a href="#client-line-{{ item.index }}">{{ item.raw }}</a>{% else %}{{ item.raw }}{% endif %} — {{ 'Cargar a mano' if item.status=='manual' else 'Pendiente de revisar' }}</li>{% endfor %}</ol></details>
+<p><small>«Fuera de esta selección» incluye los manuales y los pendientes. Una sugerencia no cuenta como coincidencia hasta que la elegís. Estos números miden tu pedido; los perfumes ya existentes en la base de destino se comprobarán antes de una importación.</small></p>
+{% endif %}
