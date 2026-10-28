@@ -1,4 +1,4 @@
-> Estado actual: SOLO LECTURA en bases de clientes. El envío está bloqueado desde el código; las referencias al adaptador de destino describen el diseño inspeccionado, no una operación habilitada. La biblioteca activa es SQLite local.
+> El envío requiere un destino habilitado y confirmación en el panel. Inserta productos e imágenes; en existentes confirmados puede cambiar el precio minorista y activarlos; las consultas de origen continúan en modo lectura. Ver README.md para el flujo actual.
 
 # Compatibilidad revisada
 
@@ -13,6 +13,6 @@ Commit inspeccionado: `03daeab2a0c719690f7bf50c2e53ccccd3839064`.
 - `frontend/src/components/ui/cards/ProductCardPerfumes.jsx`: contempla «Consultar» cuando no hay precio positivo.
 - `backend/migrations/`: existen migraciones de las tablas y volume_options. El esquema efectivo puede variar por cliente; el gestor refleja y valida las tres tablas al preparar cada operación, sin aplicar migraciones.
 
-Los modelos no permiten conocer el estado real de las secuencias de producción. Se validan sus defaults/identities y se utiliza pg_get_serial_sequence / nextval para generar referencias nuevas. Nunca se ejecuta setval, ALTER ni CREATE sobre los clientes. La asignación de categorías se hace por nombres revisados en el panel, y los IDs se buscan de nuevo dentro de la transacción de destino.
+Los modelos no permiten conocer el estado real de las secuencias de producción. Se validan sus defaults/identities y se utiliza pg_get_serial_sequence / nextval para generar referencias nuevas. Nunca se ejecuta setval, ALTER ni CREATE sobre los clientes. Las categorías se limitan a los IDs configurados para cada destino y se validan sus nombres y géneros dentro de la transacción. No se crean categorías.
 
 La recuperación utiliza transacciones de solo lectura y selecciona únicamente campos de producto, categorías y fotos. El destino usa INSERT; no modifica usuarios, carritos, pedidos ni direcciones. No se abrió ninguna conexión a bases de producción durante el desarrollo.

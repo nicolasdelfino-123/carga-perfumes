@@ -23,10 +23,16 @@
     const selectedInputs = [];
     const outside = [];
     let manualCount = 0;
+    let existingCount = 0;
     matchForm.querySelectorAll('.client-line').forEach(line => {
       const selected = line.querySelector('input.line-choice:checked');
       const manual = line.querySelector('input.manual-choice');
-      if (selected) {
+      const existing=line.dataset.existing==='true' || selected?.dataset.targetExisting==='true';
+      line.querySelector('.line-price').disabled=false;
+      line.querySelector('.line-volume').disabled=existing;
+      line.querySelector('.line-product-values').hidden=false;
+      if(existing){existingCount++;manual.checked=false;}
+      else if (selected) {
         selectedInputs.push(selected);
         manual.checked = false;
       } else {
@@ -34,9 +40,10 @@
         outside.push({index: line.dataset.line, raw: line.dataset.raw, manual: manual.checked});
       }
       line.classList.toggle('manual-line', !selected && manual.checked);
-      line.querySelector('.line-selected').textContent = selected ? `Elegiste: ${selected.dataset.productName}` : manual.checked ? 'Se cargará a mano; no se incluye en la selección.' : '';
+      line.querySelector('.line-selected').textContent = existing ? 'Ya cargado: se activará al confirmar. Precio vacío conserva el actual; un precio escrito lo actualiza.' : selected ? `Elegiste: ${selected.dataset.productName}` : manual.checked ? 'Se cargará a mano; no se incluye en la selección.' : '';
     });
     const uniqueCount = new Set(selectedInputs.map(input => input.value)).size;
+    document.getElementById('client-existing-count').textContent=existingCount;
     document.getElementById('client-selected-count').textContent = selectedInputs.length;
     document.getElementById('client-footer-matched').textContent = selectedInputs.length;
     document.getElementById('client-footer-unique').textContent = uniqueCount;
@@ -71,6 +78,7 @@
       input.name = `match_${currentLine.dataset.line}`;
       input.value = item.id;
       input.dataset.productName = item.name;
+      input.dataset.targetExisting = String(item.target_existing || false);
       const link = element('a', 'Ver fotos y descripciones ↗');
       link.href = item.detail_url;
       link.target = '_blank';
@@ -105,7 +113,7 @@
       }
       photo.className = 'master-result-photo';
       const info = element('div');
-      info.append(element('h3', item.name), element('p', `${item.brand || 'Sin marca'} · ${item.category}`), element('small', `${item.match} · ${item.photo_count} fotos`));
+      info.append(element('h3', item.name), element('p', `${item.brand || 'Sin marca'} · ${item.category}`), element('small', `${item.match} · ${item.photo_count} fotos${item.target_existing ? ' · Ya cargado: se activará; podés actualizar el precio' : ''}`));
       const actions = element('div', undefined, 'master-result-actions');
       const detail = element('a', 'Ver ficha ↗');
       detail.href = item.detail_url;
@@ -113,7 +121,7 @@
       detail.rel = 'noopener';
       actions.append(detail);
       if (currentLine) {
-        const select = element('button', 'Elegir coincidencia');
+        const select = element('button', item.target_existing ? 'Marcar como ya cargado' : 'Elegir coincidencia');
         select.type = 'button';
         select.addEventListener('click', () => choose(item));
         actions.append(select);
@@ -130,6 +138,8 @@
     try {
       const url = new URL('/api/master/search', location.origin);
       url.searchParams.set('q', query.value.trim());
+      const target=matchForm?.querySelector('[name=target]')?.value;
+      if(target)url.searchParams.set('target',target);
       const response = await fetch(url, {signal: controller.signal});
       if (!response.ok) throw new Error('search');
       const data = await response.json();

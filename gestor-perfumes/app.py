@@ -19,7 +19,7 @@ import transfers
 from presentation import rich_description
 from library import classify, backup_library, comparison_groups
 from pricing import retail_price,money_ar,selected_line_values
-from client_list import make_client_summary
+from client_list import make_client_summary, mark_manual_exclusions
 
 
 def normalize(value):
@@ -102,6 +102,14 @@ class SavedSelection(Base):
     notes: Mapped[str] = mapped_column(Text,default='')
     created_at: Mapped[str] = mapped_column(String(40))
     items: Mapped[list] = mapped_column(JSON)
+
+
+class ImportReport(Base):
+    __tablename__ = 'master_import_report'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    target: Mapped[str] = mapped_column(String(80))
+    created_at: Mapped[str] = mapped_column(String(40))
+    result: Mapped[dict] = mapped_column(JSON)
 
 
 def candidates(query, perfumes, limit=8):
@@ -201,19 +209,36 @@ def create_app(database_url=None):
     def index():
         query = request.args.get("q", "").strip()
         text = request.form.get("list", "")
+        target = request.form.get('target','')
+        inventory = transfers.target_inventory(target) if target else []
+        targets = {k:v for k,v in transfers.connections().items() if 'target' in v.get('roles',[]) and v.get('import_products')}
         with Session(engine) as db:
             perfumes = list(db.scalars(select(Perfume).order_by(Perfume.name)))
             matches = [(raw, name, candidates(name, perfumes)) for raw, name in parse_lines(text)]
+            loaded = {p.id:[item for item in inventory if transfers.duplicate_status({'name':p.name,'brand':p.brand},[item],normalize)] for p in perfumes}
+            line_existing = {}
+            line_possible = {}
+            for i,(raw,name,options) in enumerate(matches):
+                exact = [item for item in inventory if normalize(item['name'])==normalize(name)]
+                if not exact:
+                    exact = [item for p,status,_ in options if status=='Exacta' for item in loaded[p.id]]
+                if exact:
+                    line_existing[i] = exact
+                else:
+                    line_possible[i] = transfers.possible_target_matches({'name':name,'brand':''},inventory,normalize)
             visible = [p for p in perfumes if not query or normalize(query) in normalize(
                 f"{p.name} {p.brand} {p.description} {p.short_description}"
             )]
             return render_template("index.html", perfumes=visible, matches=matches, text=text,
-                                   query=query, total=len(perfumes),
-                                   client_summary=make_client_summary(parse_lines(text),{},set(),0))
+                                   query=query, total=len(perfumes), targets=targets, selected_target=target,
+                                   loaded=loaded,line_existing=line_existing,line_possible=line_possible,
+                                   client_summary=make_client_summary(parse_lines(text),{},set(),0,line_existing))
 
     @app.get('/api/master/search')
     def master_search():
         query=request.args.get('q','').strip()[:200]
+        target=request.args.get('target','')
+        inventory=transfers.target_inventory(target) if target else []
         with Session(engine) as db:
             perfumes=list(db.scalars(select(Perfume).order_by(Perfume.name)))
             results=candidates(query,perfumes,limit=None) if query else [(p,'Biblioteca',0) for p in perfumes]
@@ -225,7 +250,8 @@ def create_app(database_url=None):
                 'id':p.id,'name':p.name,'brand':p.brand,'category':p.category,'match':status,
                 'detail_url':url_for('perfume_detail',perfume_id=p.id),
                 'image_url':url_for('picture',perfume_id=p.id) if photos.get(p.id) else None,
-                'photo_count':photos.get(p.id,0)} for p,status,_ in visible])
+                'photo_count':photos.get(p.id,0),
+                'target_existing':transfers.duplicate_status({'name':p.name,'brand':p.brand},inventory,normalize)} for p,status,_ in visible])
 
     @app.post("/add")
     def add():
@@ -254,7 +280,7 @@ def create_app(database_url=None):
             ids.update(int(value) for key,value in request.form.items() if re.fullmatch(r'match_\d+',key) and value)
         except ValueError:
             abort(400)
-        if not ids or len(ids)>500:
+        if len(ids)>500:
             raise transfers.TransferError('Elegí entre 1 y 500 perfumes para revisar.')
         client_list = request.form.get('client_list','')[:100000]
         parsed_list=parse_lines(client_list)
@@ -270,11 +296,64 @@ def create_app(database_url=None):
                     indices_by_perfume.setdefault(int(value),[]).append(line)
         manual={int(key.split('_')[1]) for key,value in request.form.items()
                 if re.fullmatch(r'manual_\d+',key) and value=='1'}
+        target = request.form.get('target','')
+        inventory = transfers.target_inventory(target) if target else []
+        existing_lines = {i for i,(_,name) in enumerate(parsed_list)
+                          if any(normalize(item['name'])==normalize(name) for item in inventory)}
+        with Session(engine) as db:
+            loaded_ids = {p.id for p in db.scalars(select(Perfume).where(Perfume.id.in_(ids)))
+                          if transfers.duplicate_status({'name':p.name,'brand':p.brand},inventory,normalize)}
+        if target:
+            with Session(engine) as db:
+                all_perfumes = list(db.scalars(select(Perfume)))
+                existing_lines.update(i for i,(_,name) in enumerate(parsed_list)
+                    if any(status=='Exacta' and transfers.duplicate_status({'name':p.name,'brand':p.brand},inventory,normalize)
+                           for p,status,_ in candidates(name,all_perfumes)))
+        existing_lines.update(i for i,pid in assignments_by_line.items() if pid in loaded_ids)
+        price_updates = []
+        by_id = {}
+        for i in sorted(existing_lines):
+            raw_price = request.form.get(f'line_price_{i}','').strip()
+            name = parsed_list[i][1]
+            matches = [item for item in inventory if normalize(item['name'])==normalize(name)]
+            if not matches:
+                with Session(engine) as db:
+                    chosen = db.get(Perfume,assignments_by_line.get(i)) if assignments_by_line.get(i) else None
+                    masters = [chosen] if chosen else [p for p,status,_ in candidates(name,list(db.scalars(select(Perfume)))) if status=='Exacta']
+                    matches = [item for item in inventory if any(transfers.duplicate_status({'name':p.name,'brand':p.brand},[item],normalize) for p in masters)]
+            matches = list({item['id']:item for item in matches}.values())
+            if len(matches)!=1:
+                raise transfers.TransferError(f'{name}: no hay una coincidencia única para actualizar el precio.')
+            try:
+                price = retail_price(raw_price) if raw_price else None
+            except ValueError as error:
+                raise transfers.TransferError(f'{name}: {error}') from None
+            item = matches[0]
+            if price is None and item.get('is_active',True):
+                continue
+            change = {'id':item['id'],'name':item['name'],'old_price':str(item['price']),'price':price,'activate':True}
+            if item['id'] in by_id and by_id[item['id']]['price'] is not None and price is not None and by_id[item['id']]['price'] != price:
+                raise transfers.TransferError(f'{name}: cargaste precios diferentes para el mismo producto.')
+            if item['id'] not in by_id or price is not None:
+                by_id[item['id']] = change
+        price_updates = list(by_id.values())
+        ids -= loaded_ids
+        assignments_by_line = {i:pid for i,pid in assignments_by_line.items() if i not in existing_lines}
+        if not ids:
+            if not price_updates:
+                raise transfers.TransferError('No hay perfumes nuevos, cambios de precio ni productos inactivos para activar. Dejá vacío para conservar el precio actual o escribí uno nuevo.')
+            item,_ = transfers.authorized(target,'target')
+            summary = make_client_summary(parsed_list,{},manual,0,existing_lines)
+            token = remember('target',{'alias':target,'rows':[],'omitted':[], 'price_updates':price_updates,
+                                      'client_summary':summary,'origins':{}})
+            return render_template('target.html',alias=target,pending=[],omitted=[],price_updates=price_updates,
+                                   token=token,writable=bool(item.get('import_products')))
+
         try:
             line_values=selected_line_values(assignments_by_line,request.form)
         except ValueError as error:
             raise transfers.TransferError(str(error)) from None
-        client_summary=make_client_summary(parsed_list,assignments_by_line,manual,len(ids))
+        client_summary=make_client_summary(parsed_list,assignments_by_line,manual,len(ids),existing_lines)
         with Session(engine) as db:
             selected = list(db.scalars(select(Perfume).where(Perfume.id.in_(ids))))
             if len(selected)!=len(ids):
@@ -287,15 +366,19 @@ def create_app(database_url=None):
                     for image in db.scalars(select(Picture).where(Picture.perfume_id == p.id).order_by(Picture.id))]
                 row['category_labels'] = list(db.scalars(select(CategoryLabel.name).where(CategoryLabel.perfume_id == p.id))) or [p.category]
                 row['image_warnings'] = list(db.scalars(select(ContentIssue.message).where(ContentIssue.perfume_id == p.id)))
-                row.update(price='0.00',volume_ml=100,stock=11)
+                row['target_alias'] = target
+                row['origins'] = list(p.origins)
+                row.update(price='0.00',volume_ml=100,stock=12)
                 row.update(line_values.get(p.id,{}))
                 row['client_lines']=assignments.get(p.id,[])
                 row['client_line_indices']=indices_by_perfume.get(p.id,[])
+                row['price_entered']=any(request.form.get(f'line_price_{i}','').strip() for i in row['client_line_indices'])
                 rows.append(row)
             if not rows:
                 raise transfers.TransferError('Seleccioná al menos un perfume.')
             rows[0]['client_list'] = client_list
             rows[0]['client_summary'] = client_summary
+            rows[0]['price_updates'] = price_updates
             token = remember('selection', rows)
             targets = {k: v for k, v in transfers.connections().items() if 'target' in v.get('roles', [])}
             return render_template("preview.html", perfumes=rows, token=token, targets=targets,original_list=client_list,
@@ -307,6 +390,9 @@ def create_app(database_url=None):
         rows = []
         for item in saved_items:
             row = dict(item)
+            if 'origins' not in row:
+                master = db.get(Perfume,row['id'])
+                row['origins'] = list(master.origins) if master else []
             row['pictures'] = []
             for reference in item['pictures']:
                 pic = images.get(reference['id'])
@@ -335,13 +421,14 @@ def create_app(database_url=None):
             snapshot = {key:value for key,value in row.items() if key != 'pictures'}
             try:
                 snapshot['price'] = retail_price(request.form.get(f"price_{row['id']}",row.get('price','0')))
+                snapshot['price_entered'] = row.get('price_entered',False) or snapshot['price'] != row.get('price','0.00')
                 volume = int(request.form.get(f"volume_{row['id']}",row.get('volume_ml',100)))
                 if not 1 <= volume <= 10000:
                     raise ValueError('Los mililitros deben ser un entero entre 1 y 10000.')
             except ValueError as error:
                 raise transfers.TransferError(f"{row['name']}: {error}") from None
             snapshot['volume_ml'] = volume
-            snapshot['stock'] = 11
+            snapshot['stock'] = 12
             snapshot['pictures'] = [{'id':pic['master_picture_id'],'digest':hashlib.sha256(pic['bytes']).hexdigest(),
                 'mime_type':pic['mime_type'],'width':pic['width'],'height':pic['height']} for pic in row['pictures']]
             snapshots.append(snapshot)
@@ -373,7 +460,17 @@ def create_app(database_url=None):
             if not saved:
                 abort(404)
             return render_template('saved_selection.html',saved=saved,
+                                   targets={k:v for k,v in transfers.connections().items() if 'target' in v.get('roles',[]) and v.get('import_products')},
                                    client_summary=saved.items[0].get('client_summary') if saved.items else None)
+
+    @app.post('/selections/<int:selection_id>/import')
+    def import_saved_selection(selection_id):
+        with Session(engine) as db:
+            saved = db.get(SavedSelection,selection_id)
+            if not saved:
+                abort(404)
+            rows = selection_rows(saved.items,db)
+        return prepare_target(rows, request.form.get('target',''))
 
     @app.get('/selections/<int:selection_id>/perfume/<int:index>')
     def saved_perfume_detail(selection_id,index):
@@ -618,39 +715,187 @@ def create_app(database_url=None):
     @app.post('/target/preview')
     def target_preview():
         rows = recall(request.form.get('token'), 'selection')
-        alias = request.form.get('target', '')
+        return prepare_target(rows, request.form.get('target', ''))
+
+    def prepare_target(rows, alias):
+        price_updates = rows[0].get('price_updates',[]) if rows else []
+        if price_updates and rows[0].get('target_alias') != alias:
+            raise transfers.TransferError('Los cambios de precio pertenecen a otro destino. Prepará una selección para este cliente.')
         with transfers.connect(alias, 'target') as (conn, item):
             tables, pending, omitted = transfers.inspect_target(conn, rows, normalize)
-            names = list(conn.scalars(select(tables['category'].c.name).order_by(tables['category'].c.name)))
-        review = [(row, *transfers.suggest_category(row['category'], names, normalize)) for row in pending]
-        token = remember('mapping', {'alias':alias, 'rows':pending, 'names':names, 'omitted':omitted})
-        return render_template('mapping.html', alias=alias, review=review, names=names, omitted=omitted, token=token)
+            if omitted:
+                price_updates = transfers.existing_product_changes(conn,tables,rows,normalize,price_updates)
+            categories = transfers.target_categories(conn, item)
+            names = list(categories)
+        content_issues = {}
+        for i,row in enumerate(pending):
+            try:
+                transfers.validate_import([row])
+            except transfers.TransferError as error:
+                content_issues[i] = str(error)
+        review = [(row, *transfers.suggest_gender(row, names)) for row in pending]
+        token = remember('mapping', {'alias':alias, 'rows':pending, 'names':names, 'omitted':omitted,
+            'client_summary':rows[0].get('client_summary') if rows else None,
+            'origins':{row['name']:row.get('origins',[]) for row in rows}, 'price_updates':price_updates})
+        return render_template('mapping.html', alias=alias, review=review, names=names, category_ids=categories, omitted=omitted, token=token,price_updates=price_updates,content_issues=content_issues)
 
     @app.post('/target/map')
     def target_map():
         plan = recall(request.form.get('token'), 'mapping')
         pending = []
+        omitted = list(plan['omitted'])
+        existing_names = {}
+        price_updates = list(plan.get('price_updates',[]))
+        excluded = []
         for i, source in enumerate(plan['rows']):
+            if request.form.get(f'manual_{i}') == '1':
+                excluded.append(source)
+                continue
+            matches = source.get('target_matches',[])
+            decision = request.form.get(f'duplicate_{i}','')
+            if matches:
+                if decision.startswith('omit_'):
+                    try:
+                        match = matches[int(decision[5:])]
+                    except (ValueError, IndexError):
+                        raise transfers.TransferError('Elegí una coincidencia válida.')
+                    omitted.append(source['name'])
+                    existing_names[source['name']] = match['name']
+                    if source.get('price_entered') or not match.get('is_active',True):
+                        if match.get('id') is None or match.get('price') is None:
+                            raise transfers.TransferError('No se puede actualizar el precio de una coincidencia del mismo lote. Revisá la selección.')
+                        change = {'id':match['id'],'name':match['name'],'old_price':str(match['price']),'price':source['price'] if source.get('price_entered') else None,'activate':True}
+                        if any(c['id']==change['id'] and c['price']!=change['price'] for c in price_updates):
+                            raise transfers.TransferError('Hay precios diferentes para el mismo producto existente.')
+                        if not any(c['id']==change['id'] for c in price_updates):
+                            price_updates.append(change)
+                    continue
+                if decision != 'new':
+                    raise transfers.TransferError('Revisá los posibles duplicados antes de continuar.')
             choice = request.form.get(f'category_{i}', '')
-            if choice == '__source__':
-                name = source['category']
-            elif choice in plan['names']:
+            if choice in plan['names']:
                 name = choice
             else:
                 raise transfers.TransferError('Elegí una categoría para cada perfume.')
             extra = list(dict.fromkeys(request.form.getlist(f'extra_{i}')))
             if any(x not in plan['names'] for x in extra):
                 raise transfers.TransferError('Categoría adicional no autorizada.')
-            pending.append(dict(source, category=name, extra_categories=[x for x in extra if x != name]))
+            pending.append(dict(source, category=name, extra_categories=[x for x in extra if x != name],
+                                reviewed_matches=[transfers.match_signature(match) for match in matches]))
+        transfers.validate_import(pending)
+        manual_items = []
+        for row in excluded:
+            reason = 'Quitado de la selección por el usuario'
+            try:
+                transfers.validate_import([row])
+            except transfers.TransferError as error:
+                reason = str(error)
+            manual_items.append({'name':row['name'],'lines':row.get('client_lines') or [row['name']], 'reason':reason})
+        summary = mark_manual_exclusions(plan.get('client_summary'),excluded)
         alias = plan['alias']
         item, _ = transfers.authorized(alias, 'target')
-        token = remember('target', {'alias':alias, 'rows':pending})
-        return render_template('target.html', alias=alias, pending=pending, omitted=plan['omitted'],
-                               token=token, writable=False)
+        token = remember('target', {'alias':alias, 'rows':pending, 'omitted':omitted, 'existing_names':existing_names,
+            'client_summary':summary, 'origins':plan.get('origins',{}), 'price_updates':price_updates, 'manual_items':manual_items})
+        return render_template('target.html', alias=alias, pending=pending, omitted=omitted,
+                               token=token, writable=bool(item.get('import_products')),price_updates=price_updates,manual_items=manual_items)
 
     @app.post('/target/confirm')
     def target_confirm():
-        raise transfers.TransferError('ABORTADO: el envío a bases de clientes está bloqueado. Solo se permite guardar perfumes en la biblioteca local.')
+        token = request.form.get('token', '')
+        plan = recall(token, 'target')
+        if request.form.get('confirmation') != plan['alias']:
+            raise transfers.TransferError('Escribí el nombre del destino para confirmar.')
+        if plan['rows'] or plan.get('price_updates'):
+            inserted, omitted, backup_path = transfers.execute(plan['alias'], plan['rows'], normalize,
+                Path(app.instance_path) / 'backups',price_updates=plan.get('price_updates',[]))
+        elif plan.get('manual_items'):
+            inserted, omitted, backup_path = [], [], None
+        else:
+            raise transfers.TransferError('No hay productos ni cambios para enviar.')
+        result = {'inserted':inserted, 'omitted':list(dict.fromkeys(plan['omitted'] + omitted)),
+                  'backup':backup_path, 'client_summary':plan.get('client_summary'), 'origins':plan.get('origins',{}),
+                  'existing_names':plan.get('existing_names',{}), 'price_updates':plan.get('price_updates',[]),
+                  'manual_items':plan.get('manual_items',[])}
+        with Session(engine) as db, db.begin():
+            report = ImportReport(target=plan['alias'], result=result,
+                created_at=datetime.now(ZoneInfo('America/Argentina/Cordoba')).isoformat(timespec='seconds'))
+            db.add(report)
+            db.flush()
+            report_id = report.id
+        return redirect(url_for('import_report', report_id=report_id))
+
+    @app.get('/imports')
+    def import_reports():
+        with Session(engine) as db:
+            reports = list(db.scalars(select(ImportReport).order_by(ImportReport.id.desc())))
+            return render_template('imports.html', reports=reports)
+
+    def report_origins(report, db):
+        origins = dict(report.result.get('origins',{}))
+        names = report.result['inserted'] + report.result['omitted'] + [change['name'] for change in report.result.get('price_updates',[])]
+        missing = [name for name in names if name not in origins]
+        if missing:
+            masters = list(db.scalars(select(Perfume)))
+            for name in missing:
+                matches = [p for p in masters if normalize(p.name)==normalize(name)]
+                origins[name] = list(matches[0].origins) if len(matches)==1 else []
+        return origins
+
+    @app.get('/imports/<int:report_id>')
+    def import_report(report_id):
+        with Session(engine) as db:
+            report = db.get(ImportReport, report_id)
+            if not report:
+                abort(404)
+            return render_template('result.html', report=report, result=report.result, origins=report_origins(report,db))
+
+    @app.get('/imports/<int:report_id>/product/<int:index>')
+    def imported_product_preview(report_id,index):
+        with Session(engine) as db:
+            report = db.get(ImportReport,report_id)
+            if not report:
+                abort(404)
+            names = report.result['inserted'] + report.result['omitted'] + [change['name'] for change in report.result.get('price_updates',[])]
+            if index >= len(names):
+                abort(404)
+            alias, name = report.target, names[index]
+            origins = report_origins(report,db).get(name,[])
+        with Session(engine) as db:
+            lookup_name = db.get(ImportReport,report_id).result.get('existing_names',{}).get(name,name)
+        row = transfers.imported_product(alias,lookup_name,normalize)
+        row['origins'] = origins
+        token = remember('detail',row)
+        pictures = [url_for('detail_picture',token=token,index=i) for i in range(len(row['pictures']))]
+        return render_template('detail.html',perfume=row,pictures=pictures,source=None,embedded=True,
+            location=f'Datos actuales leídos de {alias} · Producto ID {row["id"]}',
+            detail_return_url=url_for('import_report',report_id=report_id))
+
+    @app.get('/imports/<int:report_id>/download')
+    def download_import_report(report_id):
+        with Session(engine) as db:
+            report = db.get(ImportReport, report_id)
+            if not report:
+                abort(404)
+            result = report.result
+            summary = result.get('client_summary')
+            lines = [f'Importación a {report.target}', report.created_at, '', 'IMPORTADOS EN ESTE ENVÍO']
+            lines += result['inserted'] or ['Ninguno']
+            lines += ['', 'YA EXISTÍAN EN DESTINO (NO SE VOLVIERON A IMPORTAR)']
+            lines += result['omitted'] or ['Ninguno']
+            if summary and summary.get('existing'):
+                lines += ['', 'YA CARGADOS AL PREPARAR LA LISTA'] + [item['raw'] for item in summary['existing']]
+            lines += ['', 'PRODUCTOS EXISTENTES ACTUALIZADOS (PRECIO / ACTIVACIÓN)'] + [f"{change['name']}: {change['old_price']} -> {change['price'] if change.get('price') is not None else 'conservado'}; activado: {bool(change.get('activate'))}" for change in result.get('price_updates',[])]
+            lines += ['', 'QUITADOS DE ESTE ENVÍO PARA CARGAR A MANO']
+            for item in result.get('manual_items',[]):
+                lines += [item['name'] + ' — ' + item['reason']] + item['lines']
+            lines += ['', 'QUEDARON FUERA DE ESTE ENVÍO']
+            if summary and summary.get('total_requested'):
+                lines += [item['raw'] + (' — Cargar a mano' if item['status']=='manual' else ' — Pendiente de revisar')
+                          for item in summary['outside']] or ['Ninguno']
+            else:
+                lines += ['No hay lista original asociada: no se pueden identificar pedidos fuera de la selección.']
+            return Response('\n'.join(lines), content_type='text/plain; charset=utf-8',
+                            headers={'Content-Disposition':f'attachment; filename="importacion-{report_id}.txt"'})
 
     return app
 

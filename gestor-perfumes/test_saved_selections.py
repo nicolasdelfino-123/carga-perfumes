@@ -46,7 +46,7 @@ class SavedSelections(unittest.TestCase):
                 saved=list(db.scalars(select(SavedSelection)))
                 self.assertEqual(len(saved),1)
                 snapshot=saved[0].items[0]
-                self.assertEqual((snapshot['price'],snapshot['volume_ml'],snapshot['stock']),('45000.50',100,11))
+                self.assertEqual((snapshot['price'],snapshot['volume_ml'],snapshot['stock']),('45000.50',100,12))
                 self.assertEqual(snapshot['client_list'],original)
                 self.assertEqual(snapshot['description'],'<b>Original principal</b>')
                 db.get(Perfume,pid).description='Texto modificado después'
