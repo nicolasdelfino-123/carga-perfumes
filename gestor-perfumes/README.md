@@ -20,6 +20,17 @@ cd /home/nico/Escritorio/PERFUMES/gestor-perfumes
 
 El configurador solicita la contraseña de PostgreSQL sin mostrarla, comprueba la base `catalogo_naim`, el esquema y los IDs masculino 1, femenino 2, unisex 3 con consultas de solo lectura. Guarda la URL local con permisos 600 en `instance/naim.url` y agrega el destino sin reemplazar otros clientes. No importa productos ni modifica el VPS. El túnel debe seguir abierto durante las consultas y el envío.
 
+## Mauri / Maurinexo
+
+Destino: `catalogo_maurinexo`, app `catalogo-maurinexo`, sitio https://nexovd.catalogoweb.ar (puerto web 8041). Usa el mismo túnel PostgreSQL local 55433 que Naim en este VPS; no hace falta abrir un segundo túnel si ya está activo.
+
+```bash
+cd /home/nico/Escritorio/PERFUMES/gestor-perfumes
+.venv/bin/python conectar_maurinexo.py
+```
+
+Solicita la contraseña de `catalogo_maurinexo_user`, valida la base, el esquema y las categorías masculino 1, femenino 2 y unisex 3 con consultas de solo lectura. Guarda la conexión privada en `instance/maurinexo.url` y agrega el destino sin reemplazar los demás. El ID 10 corresponde al grupo Perfumes Árabes; los productos usan las categorías hijas 1/2/3, verificadas en la base. Para preparar la carga, elegir `catalogo_maurinexo` en el panel. Registrar el destino no importa productos.
+
 ## Poblar desde el panel
 
 1. Abrir http://127.0.0.1:5055, pegar la lista, elegir el cliente/destino y buscar coincidencias. La app consulta sus productos por el túnel: marca los ya cargados y los activa y permite actualizar su precio: campo vacío conserva el actual, un importe escrito (incluido cero) se revisa antes de confirmar. No los importa nuevamente. Los parecidos se muestran para revisar. Precio y mililitros permanecen visibles desde el principio; en productos ya cargados se habilita precio y se deshabilita mililitros. El buscador modal también indica los ya cargados.
