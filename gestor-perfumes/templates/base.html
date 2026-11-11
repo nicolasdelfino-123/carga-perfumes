@@ -8,4 +8,13 @@ body{font:16px system-ui;background:#f5f4ef;color:#222;max-width:1100px;margin:a
 <p><a href="/">Biblioteca y listas</a> · <a href="/sources">Recuperar desde una base</a> · <a href="/selections">Selecciones guardadas</a> · <a href="/imports">Ver historial de importaciones</a></p>
 <div class="notice">Los orígenes se consultan en modo lectura. El envío de productos requiere un destino configurado y confirmación; guardar una selección no importa productos.</div>
 {% for message in get_flashed_messages() %}<p role="status">{{ message }}</p>{% endfor %}
-{% block content %}{% endblock %}</html>
+{% block content %}{% endblock %}
+<style>
+#perfume-preview-dialog{width:min(1100px,94vw);height:90vh;max-height:94vh;padding:0;border:0;border-radius:12px}
+#perfume-preview-dialog::backdrop{background:#0009}
+.perfume-preview-bar{padding:12px 18px;border-bottom:1px solid #ddd;background:white}
+#perfume-preview-frame{display:block;width:100%;height:calc(100% - 70px);border:0}
+</style>
+<dialog id="perfume-preview-dialog" aria-label="Fotos y descripciones del perfume"><div class="perfume-preview-bar"><button type="button" id="perfume-preview-back">← Volver a mi lista</button></div><iframe id="perfume-preview-frame" title="Fotos y descripciones" src="about:blank"></iframe></dialog>
+<script src="{{ url_for('static',filename='detail-preview.js',v='1') }}" defer></script>
+</html>

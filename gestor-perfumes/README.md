@@ -77,3 +77,24 @@ La app escucha solo en 127.0.0.1:5055. No publicar en Internet. Nunca subir `ins
 ```
 
 La integración real requiere PostgreSQL temporal exclusivo en 127.0.0.1:55465, usuario local nico, y `PERFUMES_TEST_PG=1`. Nunca utiliza bases de clientes. Verifica precios, tamaño, imágenes, estado activo, stock, duplicados, rollback, conservación de datos existentes y consultas de origen de solo lectura.
+
+## Silvina: túnel y destino con contraseña SSH
+
+En una terminal, dejar abierto (pedirá la contraseña del VPS):
+
+```bash
+ssh -p 5285 -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -L 127.0.0.1:55432:127.0.0.1:5432 root@200.58.126.102
+```
+
+En otra terminal, desde esta carpeta:
+
+```bash
+.venv/bin/python conectar_destino_silvina.py
+.venv/bin/python app.py
+```
+
+El configurador lee por SSH la conexión de Silvina sin mostrar credenciales y consulta el esquema y categorías en modo de solo lectura. Solo habilita el destino si encuentra una categoría única para cada género; no supone IDs. No importa productos. Si hay categorías ambiguas muestra sus nombres e IDs para revisarlos. Las contraseñas se ingresan en la terminal, nunca en el chat.
+
+En http://127.0.0.1:5055 pegar la lista y elegir `catalogo_silvina`. La búsqueda en la maestra local no necesita SSH. Para productos nuevos, al seleccionar una coincidencia aparecen los precios de **5, 10 y 100 ml**. Solo se guardan y envían las presentaciones con precio positivo explícito; vacío excluye esa presentación. Un perfume seleccionado requiere al menos un precio. Si no se va a cargar, quitar su elección. Se conservan al guardar y retomar la selección y se muestran antes de confirmar el envío. El precio/tamaño principal usa 100 ml si se completó, o el menor tamaño completado. Cada opción tiene stock 12.
+
+En productos existentes también aparecen los precios de 5, 10 y 100 ml: se agregan o actualizan solo los tamaños con precio escrito. Los campos vacíos conservan sus opciones actuales y el stock de las opciones existentes no cambia. Antes del envío se comprueba que las presentaciones no hayan cambiado entretanto. Si una selección de presentaciones encuentra luego un producto existente, se bloquea el envío para revisar sus opciones desde el catálogo. El envío sigue requiriendo backup verificado y confirmación explícita en el panel.

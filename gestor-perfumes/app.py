@@ -18,7 +18,7 @@ from sqlalchemy.engine import make_url
 import transfers
 from presentation import rich_description
 from library import classify, backup_library, comparison_groups
-from pricing import retail_price,money_ar,selected_line_values
+from pricing import retail_price,money_ar,selected_line_values,presentation_values,presentation_update
 from client_list import make_client_summary, mark_manual_exclusions
 
 
@@ -329,9 +329,20 @@ def create_app(database_url=None):
             except ValueError as error:
                 raise transfers.TransferError(f'{name}: {error}') from None
             item = matches[0]
-            if price is None and item.get('is_active',True):
+            option_change = {}
+            if request.form.get('presentation_mode') == '1' and any(
+                    request.form.get(f'line_option_{i}_{ml}', '').strip() for ml in (5,10,100)):
+                try:
+                    option_change = presentation_update(item, presentation_values(request.form, f'line_option_{i}')['volume_options'])
+                    price = option_change['price']
+                except ValueError as error:
+                    raise transfers.TransferError(f'{name}: {error}') from None
+            if price is None and not option_change and item.get('is_active',True):
                 continue
             change = {'id':item['id'],'name':item['name'],'old_price':str(item['price']),'price':price,'activate':True}
+            change.update(option_change)
+            if item['id'] in by_id and (option_change or by_id[item['id']].get('presentation_prices')) and by_id[item['id']] != change:
+                raise transfers.TransferError(f'{name}: el mismo perfume tiene precios por presentación diferentes en dos renglones.')
             if item['id'] in by_id and by_id[item['id']]['price'] is not None and price is not None and by_id[item['id']]['price'] != price:
                 raise transfers.TransferError(f'{name}: cargaste precios diferentes para el mismo producto.')
             if item['id'] not in by_id or price is not None:
@@ -372,7 +383,7 @@ def create_app(database_url=None):
                 row.update(line_values.get(p.id,{}))
                 row['client_lines']=assignments.get(p.id,[])
                 row['client_line_indices']=indices_by_perfume.get(p.id,[])
-                row['price_entered']=any(request.form.get(f'line_price_{i}','').strip() for i in row['client_line_indices'])
+                row['price_entered']=not row.get('volume_options') and any(request.form.get(f'line_price_{i}','').strip() for i in row['client_line_indices'])
                 rows.append(row)
             if not rows:
                 raise transfers.TransferError('Seleccioná al menos un perfume.')
@@ -427,7 +438,14 @@ def create_app(database_url=None):
                     raise ValueError('Los mililitros deben ser un entero entre 1 y 10000.')
             except ValueError as error:
                 raise transfers.TransferError(f"{row['name']}: {error}") from None
-            snapshot['volume_ml'] = volume
+            if row.get('volume_options') or any(f"option_{row['id']}_{ml}" in request.form for ml in (5,10,100)):
+                try:
+                    snapshot.update(presentation_values(request.form, f"option_{row['id']}"))
+                except ValueError as error:
+                    raise transfers.TransferError(f"{row['name']}: {error}") from None
+                snapshot['price_entered'] = False
+            else:
+                snapshot['volume_ml'] = volume
             snapshot['stock'] = 12
             snapshot['pictures'] = [{'id':pic['master_picture_id'],'digest':hashlib.sha256(pic['bytes']).hexdigest(),
                 'mime_type':pic['mime_type'],'width':pic['width'],'height':pic['height']} for pic in row['pictures']]
@@ -518,7 +536,7 @@ def create_app(database_url=None):
             row['image_warnings'] = list(db.scalars(select(ContentIssue.message).where(ContentIssue.perfume_id == p.id)))
             pictures = list(db.scalars(select(Picture.id).where(Picture.perfume_id == p.id).order_by(Picture.id)))
             urls = [url_for('picture',perfume_id=p.id,index=i) for i in range(len(pictures))]
-            return render_template('detail.html', perfume=row, pictures=urls, location='Biblioteca local', source=None)
+            return render_template('detail.html', perfume=row, pictures=urls, location='Biblioteca local', source=None, embedded=request.args.get('list_preview') == '1')
 
     @app.get('/source/<alias>/perfume/<int:product_id>')
     def source_detail(alias, product_id):
@@ -885,6 +903,9 @@ def create_app(database_url=None):
             if summary and summary.get('existing'):
                 lines += ['', 'YA CARGADOS AL PREPARAR LA LISTA'] + [item['raw'] for item in summary['existing']]
             lines += ['', 'PRODUCTOS EXISTENTES ACTUALIZADOS (PRECIO / ACTIVACIÓN)'] + [f"{change['name']}: {change['old_price']} -> {change['price'] if change.get('price') is not None else 'conservado'}; activado: {bool(change.get('activate'))}" for change in result.get('price_updates',[])]
+            for change in result.get('price_updates', []):
+                for option in change.get('presentation_prices', []):
+                    lines.append(f"{change['name']}: {option['ml']} ml = {option['price']}")
             lines += ['', 'QUITADOS DE ESTE ENVÍO PARA CARGAR A MANO']
             for item in result.get('manual_items',[]):
                 lines += [item['name'] + ' — ' + item['reason']] + item['lines']

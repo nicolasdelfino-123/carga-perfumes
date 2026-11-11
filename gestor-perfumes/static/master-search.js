@@ -28,7 +28,13 @@
       const selected = line.querySelector('input.line-choice:checked');
       const manual = line.querySelector('input.manual-choice');
       const existing=line.dataset.existing==='true' || selected?.dataset.targetExisting==='true';
-      line.querySelector('.line-price').disabled=false;
+      line.querySelector('.line-price').disabled=!existing;
+      line.querySelector('.existing-price-label').hidden=true;
+      line.querySelector('.line-price').disabled=true;
+      line.querySelectorAll('.presentation-price').forEach(input => {
+        input.disabled=false;
+        input.closest('label').hidden=false;
+      });
       line.querySelector('.line-volume').disabled=existing;
       line.querySelector('.line-product-values').hidden=false;
       if(existing){existingCount++;manual.checked=false;}
@@ -40,7 +46,7 @@
         outside.push({index: line.dataset.line, raw: line.dataset.raw, manual: manual.checked});
       }
       line.classList.toggle('manual-line', !selected && manual.checked);
-      line.querySelector('.line-selected').textContent = existing ? 'Ya cargado: se activará al confirmar. Precio vacío conserva el actual; un precio escrito lo actualiza.' : selected ? `Elegiste: ${selected.dataset.productName}` : manual.checked ? 'Se cargará a mano; no se incluye en la selección.' : '';
+      line.querySelector('.line-selected').textContent = existing ? 'Ya cargado: completá el precio de cada presentación que quieras agregar o actualizar. Vacío conserva lo existente.' : selected ? `Elegiste: ${selected.dataset.productName}` : manual.checked ? 'Se cargará a mano; no se incluye en la selección.' : '';
     });
     const uniqueCount = new Set(selectedInputs.map(input => input.value)).size;
     document.getElementById('client-existing-count').textContent=existingCount;

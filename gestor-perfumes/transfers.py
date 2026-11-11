@@ -312,7 +312,7 @@ def suggest_category(source, names, normalize):
 def target_inventory(alias):
     with connect(alias,'target') as (conn, _):
         p = schema(conn)['product']
-        return [dict(row) for row in conn.execute(select(p.c.id,p.c.name,p.c.brand,p.c.price,p.c.is_active)).mappings()]
+        return [dict(row) for row in conn.execute(select(p.c.id,p.c.name,p.c.brand,p.c.price,p.c.is_active,p.c.volume_ml,p.c.volume_options)).mappings()]
 
 
 def possible_target_matches(row, existing, normalize):
@@ -393,6 +393,8 @@ def existing_product_changes(conn, tables, rows, normalize, changes):
         item = matches[0]
         if any(change['id']==item['id'] for change in changes):
             continue
+        if row.get('volume_options'):
+            raise TransferError(f"{row['name']}: ya existe en destino. Revisá sus presentaciones desde el catálogo; no se reemplazan automáticamente.")
         price = row.get('price') if row.get('price_entered') else None
         if price is not None or not item['is_active']:
             changes.append({'id':item['id'],'name':item['name'],'old_price':str(item['price']),
@@ -445,6 +447,10 @@ def backup(alias, folder):
 def target_categories(conn, item):
     table = schema(conn)['category']
     actual = dict(conn.execute(select(table.c.id, table.c.name)).all())
+    if item.get('category_mode') == 'destination':
+        if not actual or len(set(actual.values())) != len(actual):
+            raise TransferError('El destino tiene categorías vacías o nombres repetidos; revisalas antes de importar.')
+        return {name: cid for cid, name in actual.items()}
     configured = item.get('category_ids', {})
     if not configured:
         raise TransferError('Configurá los IDs de categorías del destino antes de importar.')
@@ -477,6 +483,17 @@ def validate_import(rows):
             raise TransferError('Precio inválido.')
         if not 1 <= int(row.get('volume_ml', 100)) <= 10000:
             raise TransferError('Mililitros inválidos.')
+        if row.get('volume_options'):
+            from pricing import presentation_values
+            options = row['volume_options']
+            try:
+                parsed = presentation_values({f"option_{o['ml']}": str(o['price']) for o in options}, 'option')
+                if (len(options) != len(parsed['volume_options']) or
+                        any(o.get('stock') != 12 for o in options) or
+                        str(row['price']) != parsed['price'] or row['volume_ml'] != parsed['volume_ml']):
+                    raise ValueError('Presentaciones inconsistentes.')
+            except (ValueError, KeyError, TypeError) as error:
+                raise TransferError(f'Presentaciones inválidas: {error}') from None
         for pic in row['pictures']:
             blob = bytes(pic.get('bytes') or b'')
             if not blob or len(blob) > 20 * 1024 * 1024 or pic['mime_type'] not in {'image/png','image/jpeg','image/webp','image/gif','image/avif'}:
@@ -534,6 +551,15 @@ def execute(alias, rows, normalize, folder, price_updates=None):
                 values = {}
                 if change.get('price') is not None:
                     values['price'] = float(change['price'])
+                if 'volume_options' in change:
+                    current = conn.execute(select(p.c.volume_options,p.c.volume_ml).where(p.c.id==change['id']).with_for_update()).mappings().one_or_none()
+                    if current is None or current['volume_options'] != change['old_volume_options'] or current['volume_ml'] != change['old_volume_ml']:
+                        raise TransferError(f"Cambiaron las presentaciones de {change['name']}. Volvé a revisar los precios.")
+                    from pricing import presentation_update
+                    expected = presentation_update(dict(current), change['presentation_prices'])
+                    if expected['volume_options'] != change['volume_options'] or expected['price'] != change['price']:
+                        raise TransferError('Cambios de presentaciones inconsistentes.')
+                    values['volume_options'] = change['volume_options']
                 if change.get('activate'):
                     values['is_active'] = True
                 if not values:
@@ -556,7 +582,7 @@ def execute(alias, rows, normalize, folder, price_updates=None):
                     short_description=row.get('short_description') or '', price=float(row.get('price') or 0),
                     stock=12, category_id=categories[row['category']], is_active=True, created_at=datetime.now(),
                     image_url=f'/public/img/{iid}', volume_ml=int(row.get('volume_ml',100)),
-                    volume_options=[], flavors=[], flavor_enabled=False, flavor_catalog=[],
+                    volume_options=[dict(option, price=float(option['price'])) for option in row.get('volume_options', [])], flavors=[], flavor_enabled=False, flavor_catalog=[],
                     flavor_stock_mode=False, price_wholesale=0, puffs=None, nicotine_mg=None
                 ).returning(p.c.id)).scalar_one()
                 for index, pic in enumerate(row['pictures']):
